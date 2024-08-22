@@ -8,9 +8,10 @@ from datetime import datetime, timedelta, timezone
 import openai
 
 # JIRA configuration
-JIRA_URL = 'https://rfxdev.atlassian.net/rest/api/2/search'
-USERNAME = 'akumar@rfxcel.com'
-
+JIRA_URL = 'https://abcdef.atlassian.net/rest/api/2/search'
+USERNAME = 'Enter Your mail'
+API_TOKEN = ""# Replace with your JIRA API token
+OPENAI_API_KEY ="" # Replace with your API token
 openai.api_key = OPENAI_API_KEY
 
 def categorize_ticket(summary, description):
