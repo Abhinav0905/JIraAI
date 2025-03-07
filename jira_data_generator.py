@@ -190,4 +190,4 @@ if __name__ == "__main__":
     if not all([JIRA_API_TOKEN, JIRA_EMAIL]):
         print("Please set JIRA_API_TOKEN and JIRA_EMAIL environment variables")
     else:
-        create_tickets(200)  # Creating 200 tickets as a test
+        create_tickets(1000)  # Creating 1000 tickets as a test

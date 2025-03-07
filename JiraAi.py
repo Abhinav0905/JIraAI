@@ -871,20 +871,37 @@ def analyze_tickets_basic(query: str, tickets: List[Dict], start_date: datetime,
         return f"Error analyzing tickets: {str(e)}"
 
 def analyze_tickets_with_ai(query: str, tickets: List[Dict], start_date: datetime, end_date: datetime) -> str:
-    """Analyze tickets using OpenAI for natural language understanding."""
+    """Analyze tickets using a multi-agent system with specialized agents."""
     try:
         filtered_tickets = [t for t in tickets if start_date <= make_timezone_aware(t['created']) <= end_date]
         
-        # Prepare context for OpenAI
+        # Define agent roles and their specialized prompts
+        agents = {
+            'categorizer': {
+                'role': "You are a ticket categorization expert. Focus on analyzing ticket categories and their patterns.",
+                'task': "Analyze the category distribution and trends in the tickets."
+            },
+            'status_analyzer': {
+                'role': "You are a workflow expert. Focus on ticket status transitions and process efficiency.",
+                'task': "Analyze the status distribution and workflow patterns."
+            },
+            'trend_analyzer': {
+                'role': "You are a data trend analyst. Focus on temporal patterns and anomalies.",
+                'task': "Analyze ticket creation trends and temporal patterns."
+            }
+        }
+        
+        # Prepare shared context
         ticket_summary = {
             'total_tickets': len(filtered_tickets),
             'date_range': f"{start_date.date()} to {end_date.date()}",
             'status_distribution': {},
             'category_distribution': {},
-            'daily_counts': {}
+            'daily_counts': {},
+            'severity_distribution': {}
         }
         
-        # Collect statistics
+        # Collect comprehensive statistics
         for ticket in filtered_tickets:
             # Status distribution
             status = ticket['status']
@@ -897,42 +914,95 @@ def analyze_tickets_with_ai(query: str, tickets: List[Dict], start_date: datetim
             # Daily counts
             created_date = make_timezone_aware(ticket['created']).date().isoformat()
             ticket_summary['daily_counts'][created_date] = ticket_summary['daily_counts'].get(created_date, 0) + 1
+            
+            # Severity distribution
+            severity = ticket.get('severity', 'Unknown')
+            ticket_summary['severity_distribution'][severity] = ticket_summary['severity_distribution'].get(severity, 0) + 1
 
-        context = f"""
-        Ticket Analysis Context:
-        Time Period: {ticket_summary['date_range']}
-        Total Tickets: {ticket_summary['total_tickets']}
+        # Agent-specific analyses
+        agent_insights = {}
         
-        Status Distribution:
-        {json.dumps(ticket_summary['status_distribution'], indent=2)}
+        for agent_name, agent_config in agents.items():
+            try:
+                agent_prompt = f"""
+                {agent_config['role']}
+                
+                Ticket Analysis Context:
+                Time Period: {ticket_summary['date_range']}
+                Total Tickets: {ticket_summary['total_tickets']}
+                
+                Status Distribution:
+                {json.dumps(ticket_summary['status_distribution'], indent=2)}
+                
+                Category Distribution:
+                {json.dumps(ticket_summary['category_distribution'], indent=2)}
+                
+                Daily Ticket Counts:
+                {json.dumps(dict(sorted(ticket_summary['daily_counts'].items())), indent=2)}
+                
+                Severity Distribution:
+                {json.dumps(ticket_summary['severity_distribution'], indent=2)}
+                
+                {agent_config['task']}
+                Based on this data, analyze the following query: {query}
+                Provide only relevant insights based on your specialized role.
+                """
+
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": agent_config['role']},
+                        {"role": "user", "content": agent_prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=500
+                )
+                agent_insights[agent_name] = response.choices[0].message.content.strip()
+                
+            except Exception as e:
+                logger.error(f"Error in {agent_name} analysis: {str(e)}")
+                agent_insights[agent_name] = f"Error in {agent_name} analysis"
+
+        # Coordinator agent to synthesize insights
+        coordinator_prompt = f"""
+        You are a coordination expert. Synthesize the following agent insights into a coherent response:
         
-        Category Distribution:
-        {json.dumps(ticket_summary['category_distribution'], indent=2)}
+        Categorizer: {agent_insights['categorizer']}
+        Status Analyzer: {agent_insights['status_analyzer']}
+        Trend Analyzer: {agent_insights['trend_analyzer']}
         
-        Daily Ticket Counts:
-        {json.dumps(dict(sorted(ticket_summary['daily_counts'].items())), indent=2)}
+        Original Query: {query}
+        
+        Provide a clear, concise, and well-structured response that addresses the query while incorporating relevant insights from all agents.
         """
 
         try:
-            response = client.chat.completions.create(
+            coordinator_response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a JIRA ticket analysis expert. Provide clear, concise answers based on the ticket data provided."},
-                    {"role": "user", "content": f"Based on this ticket data:\n{context}\n\nPlease answer this question: {query}"}
+                    {"role": "system", "content": "You are a coordination expert that synthesizes insights from multiple specialized agents."},
+                    {"role": "user", "content": coordinator_prompt}
                 ],
                 temperature=0.3,
-                max_tokens=500
+                max_tokens=800
             )
-            return response.choices[0].message.content.strip()
+            
+            return coordinator_response.choices[0].message.content.strip()
             
         except Exception as e:
-            logger.error(f"OpenAI API error: {str(e)}")
-            # Fallback to basic analysis
-            return analyze_tickets_basic(query, filtered_tickets, start_date, end_date)
+            logger.error(f"Coordinator error: {str(e)}")
+            # Fallback to returning individual agent insights
+            return "\n\n".join([
+                "Agent Insights:",
+                f"Category Analysis: {agent_insights['categorizer']}",
+                f"Status Analysis: {agent_insights['status_analyzer']}",
+                f"Trend Analysis: {agent_insights['trend_analyzer']}"
+            ])
             
     except Exception as e:
-        logger.error(f"Error in AI analysis: {str(e)}")
-        return f"Error analyzing tickets: {str(e)}"
+        logger.error(f"Error in multi-agent analysis: {str(e)}")
+        # Fallback to basic analysis
+        return analyze_tickets_basic(query, filtered_tickets, start_date, end_date)
 
 # Update the sidebar query section with AI integration
 st.sidebar.write("## Smart Query Assistant")
@@ -972,6 +1042,4 @@ if st.sidebar.button('Analyze'):
             {answer}
             ```
             """)
-            
-            # Show success animation
-            st.balloons()
+
